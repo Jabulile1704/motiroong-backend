@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Compiled output
+functions/lib/
+*.tsbuildinfo
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+*.local
+
+# Service account credentials — never commit these
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store

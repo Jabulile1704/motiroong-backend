@@ -1,0 +1,113 @@
+rules_version = '2';
+
+// MoTiroong attendance — Firestore security rules.
+//
+// Posture: the client is a READER, never a writer. Every state change that
+// matters (creating an employee, approving one, binding a device, clocking
+// in/out, reviewing an exception) goes through a Cloud Function, which uses
+// the Admin SDK and therefore bypasses these rules entirely.
+//
+// That is deliberate. An attendance record is only trustworthy if the device
+// that benefits from it cannot author it — if the app could write to
+// `attendance/` directly, a user could fabricate a shift from their couch.
+// So the rules below grant read access to your own data and deny all writes.
+//
+// Role and status live in custom claims (set by setEmployeeClaims in
+// functions/src/auth/approval.ts), not in the document, so that a user cannot
+// escalate themselves by writing to their own profile.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------- helpers
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function claims() {
+      return request.auth.token;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function hasRole(role) {
+      return signedIn() && claims().get('role', '') == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    // Supervisors can see their team; admins can see everyone.
+    function isReviewer() {
+      return isAdmin() || hasRole('supervisor');
+    }
+
+    // A pending or suspended employee is authenticated but not yet cleared to
+    // use the app. Reference data stays hidden until an admin approves them.
+    function isActive() {
+      return signedIn() && claims().get('status', '') == 'active';
+    }
+
+    // ------------------------------------------------------------- employees
+
+    match /employees/{uid} {
+      // You can always read your own profile — the app needs it to show
+      // "waiting for approval" before the account goes active.
+      allow read: if isSelf(uid) || isReviewer();
+      allow write: if false; // createEmployeeProfile / approveEmployee only
+
+      // Device bindings for biometric sign-in. The stored value is a SHA-256
+      // hash of the device secret, never the secret itself, but there is no
+      // reason for the client to read it back — it holds the original in the
+      // Keychain/Keystore. Listing your own devices (to revoke one) is fine.
+      match /devices/{deviceId} {
+        allow read: if isSelf(uid) || isAdmin();
+        allow write: if false; // enrollDevice / revokeDevice only
+      }
+    }
+
+    // ------------------------------------------------------------------ sites
+
+    // Geofence definitions. Active employees need these to render the map and
+    // to see which site they are near; only admins may change them.
+    match /sites/{siteId} {
+      allow read: if isActive();
+      allow write: if false; // upsertSite / archiveSite only
+    }
+
+    // ------------------------------------------------------------- attendance
+
+    match /attendance/{recordId} {
+      // Read your own history, or anyone's if you review attendance.
+      allow read: if signedIn() &&
+                     (resource.data.uid == request.auth.uid || isReviewer());
+      allow write: if false; // clockIn / clockOut only
+    }
+
+    // ------------------------------------------------------------- exceptions
+
+    match /exceptions/{exceptionId} {
+      allow read: if signedIn() &&
+                     (resource.data.uid == request.auth.uid || isReviewer());
+      allow write: if false; // submitException / reviewException only
+    }
+
+    // ------------------------------------------------------------ audit logs
+
+    // Append-only trail written by functions. Admins read it; nobody edits it.
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------ catch-all
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
