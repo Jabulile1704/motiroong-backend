@@ -30,9 +30,12 @@ import {
   parseGeoPoint,
 } from '../lib/lib/geo.js';
 import {
+  hashPin,
   hashSecret,
   hashesMatch,
+  isTrivialPin,
   requireDeviceSecret,
+  requirePin,
 } from '../lib/lib/crypto.js';
 import { Config } from '../lib/config.js';
 
@@ -193,5 +196,36 @@ describe('config', () => {
   test('the nightly sweep threshold is a plausible shift length', () => {
     assert.ok(Config.attendance.maxShiftHours >= 8);
     assert.ok(Config.attendance.maxShiftHours <= 24);
+  });
+});
+
+describe('sign-in PINs', () => {
+  const secret = 'a'.repeat(64);
+  const other = 'b'.repeat(64);
+
+  test('the same PIN on a different device hashes differently', () => {
+    assert.notEqual(hashPin(secret, '482915'), hashPin(other, '482915'));
+  });
+
+  test('a correct PIN matches and a wrong one does not', () => {
+    const stored = hashPin(secret, '482915');
+    assert.ok(hashesMatch(stored, hashPin(secret, '482915')));
+    assert.ok(!hashesMatch(stored, hashPin(secret, '482916')));
+  });
+
+  test('rejects anything but exactly six digits', () => {
+    for (const bad of ['12345', '1234567', '48291a', '', 482915, null]) {
+      assert.throws(() => requirePin(bad));
+    }
+    assert.equal(requirePin('482915'), '482915');
+  });
+
+  test('refuses the PINs everyone tries first', () => {
+    for (const trivial of ['000000', '777777', '123456', '654321', '345678']) {
+      assert.ok(isTrivialPin(trivial), trivial);
+      assert.throws(() => requirePin(trivial));
+    }
+    assert.ok(!isTrivialPin('482915'));
+    assert.ok(!isTrivialPin('112233'));
   });
 });
