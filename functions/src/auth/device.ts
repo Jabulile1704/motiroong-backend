@@ -333,6 +333,7 @@ export const getMyProfile = onCall(
       employeeId: employee.employeeId,
       fullName: employee.fullName,
       email: employee.email,
+      phone: employee.phone ?? null,
       role: employee.role,
       status: employee.status,
       statusReason: employee.statusReason,

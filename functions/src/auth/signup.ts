@@ -19,6 +19,7 @@ import {
   requireString,
 } from '../lib/errors';
 import { auth, db, employeeRef, employeesRef } from '../lib/firebase';
+import { normalisePhone, optionalPhone } from '../lib/phone';
 import { requireAuth } from '../lib/guards';
 import { setEmployeeClaims } from './claims';
 import type { EmployeeDoc } from '../types';
@@ -76,7 +77,7 @@ export const createEmployeeProfile = onCall(
       max: 120,
     });
     const requestedId = optionalString(data.employeeId, 32);
-    const phone = optionalString(data.phone, 32);
+    const phone = optionalPhone(data.phone);
     const department = optionalString(data.department, 120);
     const siteId = optionalString(data.siteId, 64);
 
@@ -204,5 +205,40 @@ export const cancelSignUp = onCall(
 
     await auth.deleteUser(uid);
     return { deleted: true };
+  },
+);
+
+/**
+ * Lets an employee update their own contact number.
+ *
+ * Only the phone: name, staff number, department and site are HR's to change
+ * (via the admin dashboard), because payroll keys off them. Works for any
+ * signed-in employee with a profile, pending or active, so someone can fix a
+ * typo while they wait for approval.
+ */
+export const updateMyProfile = onCall(
+  { region: Config.region, cors: true },
+  async (request) => {
+    const { uid, email } = requireAuth(request);
+    const ref = employeeRef(uid);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) {
+      throw badRequest('We could not find your employee record.');
+    }
+
+    const phone = normalisePhone(request.data?.phone);
+    const previous = (snapshot.data() as EmployeeDoc).phone ?? null;
+
+    await ref.update({ phone, updatedAt: FieldValue.serverTimestamp() });
+
+    await writeAudit({
+      action: 'employee.phone_updated',
+      actorUid: uid,
+      actorEmail: email,
+      targetId: uid,
+      metadata: { hadPhone: previous !== null },
+    });
+
+    return { phone };
   },
 );

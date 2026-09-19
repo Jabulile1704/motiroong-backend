@@ -159,8 +159,13 @@ export interface ExceptionDoc {
   employeeId: string;
   /** The attendance record being explained, when there is one. */
   attendanceId: string | null;
-  /** `missed_clock_in`, `outside_geofence`, `device_failure`, `other`. */
+  /**
+   * `late_arrival`, `early_leave`, `absence`, `missed_clock_in`,
+   * `missed_clock_out`, `outside_geofence`, `device_failure`, `other`.
+   */
   type: string;
+  /** The calendar day the request is about (`YYYY-MM-DD`), if given. */
+  forDate?: string | null;
   reason: string;
   status: ExceptionStatus;
   submittedAt: Timestamp;
