@@ -20,6 +20,7 @@ import { closeStaleShifts } from './attendance/clock';
 export {
   createEmployeeProfile,
   cancelSignUp,
+  updateMyProfile,
   enforceSignUpDomain,
 } from './auth/signup';
 

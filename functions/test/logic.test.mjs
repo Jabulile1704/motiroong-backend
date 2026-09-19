@@ -229,3 +229,42 @@ describe('sign-in PINs', () => {
     assert.ok(!isTrivialPin('112233'));
   });
 });
+
+describe('phone numbers', async () => {
+  const { normalisePhone, optionalPhone } = await import('../lib/lib/phone.js');
+
+  test('accepts the usual ways of writing a number, tidying spaces', () => {
+    assert.equal(normalisePhone('082 555 1234'), '082 555 1234');
+    assert.equal(normalisePhone(' +27  82-555-1234 '), '+27 82-555-1234');
+    assert.equal(normalisePhone('(051) 405 9111'), '(051) 405 9111');
+  });
+
+  test('rejects letters, too few or too many digits', () => {
+    for (const bad of ['082 555 12ab', '12345', '+1234567890123456', 'call me', 42]) {
+      assert.throws(() => normalisePhone(bad));
+    }
+  });
+
+  test('optional phone treats blank as none', () => {
+    assert.equal(optionalPhone(''), null);
+    assert.equal(optionalPhone(undefined), null);
+    assert.equal(optionalPhone('0825551234'), '0825551234');
+  });
+});
+
+describe('exception dates', async () => {
+  const { parseForDate } = await import('../lib/exceptions/exceptions.js');
+  const now = new Date('2026-09-19T10:00:00Z');
+
+  test('accepts a real calendar date near today, or none', () => {
+    assert.equal(parseForDate('2026-09-18', now), '2026-09-18');
+    assert.equal(parseForDate('2026-10-15', now), '2026-10-15');
+    assert.equal(parseForDate(undefined, now), null);
+  });
+
+  test('rejects impossible, malformed and far-off dates', () => {
+    for (const bad of ['2026-02-30', '18/09/2026', '2026-9-18', '2020-01-01', '2027-06-01']) {
+      assert.throws(() => parseForDate(bad, now), bad);
+    }
+  });
+});

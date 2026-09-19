@@ -41,8 +41,11 @@ export function requireString(
     throw badRequest(`${field} is required.`);
   }
   const trimmed = value.trim();
-  if (trimmed.length < min) {
+  if (trimmed.length === 0) {
     throw badRequest(`${field} is required.`);
+  }
+  if (trimmed.length < min) {
+    throw badRequest(`${field} must be at least ${min} characters.`);
   }
   if (trimmed.length > max) {
     throw badRequest(`${field} must be ${max} characters or fewer.`);
