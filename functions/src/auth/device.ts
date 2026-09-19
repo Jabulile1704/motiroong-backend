@@ -19,30 +19,47 @@ import {
   optionalString,
   requireString,
 } from '../lib/errors';
-import { hashSecret, hashesMatch, requireDeviceSecret } from '../lib/crypto';
+import {
+  hashPin,
+  hashSecret,
+  hashesMatch,
+  requireDeviceSecret,
+  requirePin,
+} from '../lib/crypto';
 import { auth, devicesRef, employeeRef, employeesRef } from '../lib/firebase';
-import { requireActiveEmployee, requireAuth } from '../lib/guards';
+import { requireAuth } from '../lib/guards';
 import type { DeviceDoc, EmployeeDoc } from '../types';
 
 /**
  * Binds this device to the signed-in employee.
  *
- * Called once, right after the user turns on biometric sign-in and passes
- * the OS prompt. Requires an *active* employee: a pending account must not
- * be able to set up a fast sign-in path to an account that may yet be
- * rejected.
+ * Called once, from sign-up or Settings, after the user picks Face ID /
+ * fingerprint (and passes the OS prompt) or chooses a PIN.
+ *
+ * Pending accounts may enrol, so sign-up can set up quick sign-in in one
+ * pass. That grants nothing early: `signInWithDevice` mints a token for a
+ * pending employee exactly as a password sign-in would, and every callable
+ * that does anything still demands an active account. Suspended and
+ * rejected accounts are refused.
  */
 export const enrollDevice = onCall(
   { region: Config.region, cors: true },
   async (request) => {
-    const caller = await requireActiveEmployee(request);
+    const caller = await requireEnrollableEmployee(request);
     const data = request.data ?? {};
 
     const deviceId = requireString(data.deviceId, 'Device', { max: 128 });
     const secret = requireDeviceSecret(data.secret);
     const platform = optionalString(data.platform, 32) ?? 'unknown';
     const model = optionalString(data.model, 120) ?? 'Unknown device';
-    const biometricType = optionalString(data.biometricType, 32) ?? 'unknown';
+    const method = data.method === 'pin' ? 'pin' : 'biometric';
+    const biometricType =
+      method === 'pin'
+        ? 'pin'
+        : (optionalString(data.biometricType, 32) ?? 'unknown');
+    // Hashed with the secret as the key, so the stored value is useless
+    // without the phone. The PIN itself is never stored or logged.
+    const pinHash = method === 'pin' ? hashPin(secret, requirePin(data.pin)) : null;
 
     const collection = devicesRef(caller.uid);
     const existing = await collection.get();
@@ -67,6 +84,8 @@ export const enrollDevice = onCall(
         platform,
         model,
         biometricType,
+        method,
+        pinHash,
         enrolledAt: FieldValue.serverTimestamp(),
         lastUsedAt: null,
         revokedAt: null,
@@ -80,19 +99,21 @@ export const enrollDevice = onCall(
       actorUid: caller.uid,
       actorEmail: caller.email,
       targetId: deviceId,
-      metadata: { platform, model, biometricType },
+      metadata: { platform, model, biometricType, method },
     });
 
     return {
       deviceId,
       enrolled: true,
+      method,
       devicesRemaining: Config.device.maxPerEmployee - (isReEnroll ? live.length : live.length + 1),
     };
   },
 );
 
 /**
- * Exchanges a device secret for a Firebase custom token.
+ * Exchanges a device secret (plus the PIN, on a PIN device) for a Firebase
+ * custom token.
  *
  * This is the one unauthenticated entry point in the codebase — by
  * definition, the caller has no session yet. Everything therefore hangs on
@@ -112,6 +133,7 @@ export const signInWithDevice = onCall(
     }).toUpperCase();
     const deviceId = requireString(data.deviceId, 'Device', { max: 128 });
     const secret = requireDeviceSecret(data.secret);
+    const pin = typeof data.pin === 'string' ? data.pin : null;
 
     // A deliberately vague message: which of the three inputs was wrong is
     // not something an attacker should be able to learn by probing.
@@ -126,7 +148,9 @@ export const signInWithDevice = onCall(
     if (employees.empty) throw rejection;
 
     const employee = employees.docs[0].data() as EmployeeDoc;
-    if (employee.status !== 'active') {
+    // Pending accounts get in, like a password sign-in, and land on the
+    // "awaiting approval" screen; everything else still demands `active`.
+    if (employee.status !== 'active' && employee.status !== 'pending') {
       throw failed(
         'Your account is not active. Please sign in with your password for details.',
       );
@@ -141,18 +165,38 @@ export const signInWithDevice = onCall(
 
     if (device.failedAttempts >= Config.device.maxFailedAttempts) {
       throw failed(
-        'Biometric sign-in is locked on this device. Sign in with your password to set it up again.',
+        'Quick sign-in is locked on this device. Sign in with your password to set it up again.',
       );
     }
 
-    if (!hashesMatch(device.secretHash, hashSecret(secret))) {
+    const method = device.method ?? 'biometric';
+    const pinOk =
+      method !== 'pin' ||
+      (pin !== null &&
+        typeof device.pinHash === 'string' &&
+        hashesMatch(device.pinHash, hashPin(secret, pin)));
+
+    const secretOk = hashesMatch(device.secretHash, hashSecret(secret));
+    if (!secretOk || !pinOk) {
+      const attempts = device.failedAttempts + 1;
       await deviceRef.update({ failedAttempts: FieldValue.increment(1) });
       await writeAudit({
         action: 'device.signin_failed',
         actorUid: employee.uid,
         targetId: deviceId,
-        metadata: { employeeId, attempts: device.failedAttempts + 1 },
+        metadata: { employeeId, attempts, method },
       });
+      // Only once the secret has proved this is the enrolled phone is it
+      // safe to say the PIN was the problem — and useful, since the holder
+      // needs to know how many tries remain before the lockout.
+      if (secretOk) {
+        const left = Config.device.maxFailedAttempts - attempts;
+        throw forbidden(
+          left > 0
+            ? `Incorrect PIN. ${left} ${left === 1 ? 'try' : 'tries'} left.`
+            : 'Incorrect PIN. PIN sign-in is now locked on this phone — sign in with your password to set it up again.',
+        );
+      }
       throw rejection;
     }
 
@@ -164,7 +208,8 @@ export const signInWithDevice = onCall(
     // `biometric: true` rides along in the token so `clockIn` can record
     // that this shift was started from a biometrically verified session.
     const token = await auth.createCustomToken(employee.uid, {
-      biometric: true,
+      biometric: method === 'biometric',
+      pin: method === 'pin',
       deviceId,
     });
 
@@ -172,11 +217,13 @@ export const signInWithDevice = onCall(
       action: 'device.signin',
       actorUid: employee.uid,
       targetId: deviceId,
-      metadata: { employeeId },
+      metadata: { employeeId, method },
     });
 
     return {
       token,
+      method,
+      status: employee.status,
       uid: employee.uid,
       employeeId: employee.employeeId,
       fullName: employee.fullName,
@@ -201,6 +248,7 @@ export const listDevices = onCall(
           platform: d.platform,
           model: d.model,
           biometricType: d.biometricType,
+          method: d.method ?? 'biometric',
           enrolledAt: d.enrolledAt?.toDate().toISOString() ?? null,
           lastUsedAt: d.lastUsedAt?.toDate().toISOString() ?? null,
           locked: d.failedAttempts >= Config.device.maxFailedAttempts,
@@ -295,3 +343,26 @@ export const getMyProfile = onCall(
     };
   },
 );
+
+/**
+ * Signed in, with an employee record that is active or still pending.
+ *
+ * Deliberately narrower than "any signed-in user": a suspended or rejected
+ * account must not be able to bind a new phone.
+ */
+async function requireEnrollableEmployee(
+  request: Parameters<typeof requireAuth>[0],
+): Promise<{ uid: string; email: string | null; employee: EmployeeDoc }> {
+  const { uid, email } = requireAuth(request);
+  const snapshot = await employeeRef(uid).get();
+  if (!snapshot.exists) {
+    throw notFound('We could not find your employee record.');
+  }
+  const employee = snapshot.data() as EmployeeDoc;
+  if (employee.status !== 'active' && employee.status !== 'pending') {
+    throw forbidden(
+      employee.statusReason ?? 'Your account is not active. Please contact HR.',
+    );
+  }
+  return { uid, email, employee };
+}
