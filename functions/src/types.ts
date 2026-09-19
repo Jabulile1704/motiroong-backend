@@ -61,6 +61,14 @@ export interface DeviceDoc {
    * data, just the OS's yes/no.
    */
   biometricType: string;
+  /**
+   * How this device unlocks its secret: the OS biometric prompt, or a PIN the
+   * server checks. Documents written before PIN support have no field and are
+   * biometric.
+   */
+  method?: 'biometric' | 'pin';
+  /** `hashPin(secret, pin)` for PIN devices, null otherwise. */
+  pinHash?: string | null;
   enrolledAt: Timestamp;
   lastUsedAt: Timestamp | null;
   revokedAt: Timestamp | null;
@@ -105,7 +113,10 @@ export type AttendanceFlag =
   | 'clock_skew'
   /** Submitted from the offline queue well after the fact. */
   | 'late_sync'
-  /** Signed in without a biometric assertion (password fallback). */
+  /**
+   * Signed in without a device-verified session — password fallback rather
+   * than Face ID, fingerprint or PIN.
+   */
   | 'no_biometric'
   /** Shift ran past the maximum, so clock-out was forced. */
   | 'auto_closed';

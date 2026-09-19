@@ -64,6 +64,9 @@ export const clockIn = onCall(
     // The app cannot simply assert this — it is read from the token minted by
     // signInWithDevice, so only a real biometric session can set it.
     const biometric = request.auth?.token?.biometric === true;
+    // A PIN session is also device-verified (the enrolled phone's secret plus
+    // the PIN), so it is not flagged as a password fallback.
+    const deviceVerified = biometric || request.auth?.token?.pin === true;
 
     const existing = await findOpenRecord(caller.uid);
     if (existing) {
@@ -90,7 +93,7 @@ export const clockIn = onCall(
       ...geo.flags,
       ...clockSkewFlags(point, now),
     ];
-    if (!biometric) flags.push('no_biometric');
+    if (!deviceVerified) flags.push('no_biometric');
 
     const ref = attendanceRef().doc();
     const record = {
@@ -144,6 +147,7 @@ export const clockOut = onCall(
     const point = parseGeoPoint(data.location);
     const deviceId = optionalString(data.deviceId, 128);
     const biometric = request.auth?.token?.biometric === true;
+    const deviceVerified = biometric || request.auth?.token?.pin === true;
 
     const open = await findOpenRecord(caller.uid);
     if (!open) {
@@ -168,7 +172,7 @@ export const clockOut = onCall(
       ...record.flags,
       ...geo.flags,
       ...clockSkewFlags(point, now),
-      ...(biometric ? [] : (['no_biometric'] as AttendanceFlag[])),
+      ...(deviceVerified ? [] : (['no_biometric'] as AttendanceFlag[])),
     ]);
 
     await open.ref.update({
