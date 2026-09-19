@@ -22,6 +22,9 @@ import { requireActiveEmployee, requireRole } from '../lib/guards';
 import type { AttendanceDoc, ExceptionDoc } from '../types';
 
 const EXCEPTION_TYPES = [
+  'late_arrival',
+  'early_leave',
+  'absence',
   'missed_clock_in',
   'missed_clock_out',
   'outside_geofence',
@@ -42,6 +45,7 @@ export const submitException = onCall(
     }
     const reason = requireString(data.reason, 'Reason', { min: 10, max: 1000 });
     const attendanceId = optionalString(data.attendanceId, 64);
+    const forDate = parseForDate(data.forDate);
 
     // Verify the record is really theirs before letting them attach to it —
     // otherwise an employee could hang an explanation off a colleague's shift.
@@ -73,6 +77,7 @@ export const submitException = onCall(
       employeeId: caller.employee.employeeId,
       attendanceId,
       type,
+      forDate,
       reason,
       status: 'pending' as const,
       submittedAt: FieldValue.serverTimestamp(),
@@ -86,7 +91,7 @@ export const submitException = onCall(
       actorUid: caller.uid,
       actorEmail: caller.email,
       targetId: ref.id,
-      metadata: { type, attendanceId },
+      metadata: { type, attendanceId, forDate },
     });
 
     return { exceptionId: ref.id, status: 'pending' as const };
@@ -189,10 +194,32 @@ function summarise(e: ExceptionDoc) {
     employeeId: e.employeeId,
     attendanceId: e.attendanceId,
     type: e.type,
+    forDate: e.forDate ?? null,
     reason: e.reason,
     status: e.status,
     submittedAt: e.submittedAt?.toDate().toISOString() ?? null,
     reviewedAt: e.reviewedAt?.toDate().toISOString() ?? null,
     reviewNotes: e.reviewNotes,
   };
+}
+
+/**
+ * The day a request is about, as `YYYY-MM-DD` — a calendar date, not an
+ * instant, so it means the same day in every timezone. Optional; up to a year
+ * back and 60 days ahead (a planned absence can be requested in advance).
+ */
+export function parseForDate(value: unknown, now = new Date()): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw badRequest('Please choose the date this request is about.');
+  }
+  const day = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== value) {
+    throw badRequest('Please choose a valid date.');
+  }
+  const ms = day.getTime() - now.getTime();
+  if (ms < -366 * 86_400_000 || ms > 60 * 86_400_000) {
+    throw badRequest('That date is too far from today for a request.');
+  }
+  return value;
 }
