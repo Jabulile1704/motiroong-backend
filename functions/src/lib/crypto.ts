@@ -21,7 +21,7 @@
  * is the same guarantee as a passkey and strictly better than a stored
  * password.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Config } from '../config';
 import { badRequest } from './errors';
 
@@ -58,6 +58,42 @@ export function requireDeviceSecret(value: unknown): string {
     throw badRequest('This device is not set up for biometric sign-in.');
   }
   return secret;
+}
+
+/**
+ * Hash of a sign-in PIN, keyed with the device secret.
+ *
+ * A 6-digit PIN has only a million values, so a plain or even a slow hash of
+ * it could be brute-forced by anyone holding a copy of the database. Keying
+ * the HMAC with the device secret closes that: we store only SHA-256 of the
+ * secret, never the secret, so a leaked `pinHash` cannot be tested offline
+ * without 256 bits the server does not keep. Online guessing is capped by the
+ * device's `failedAttempts` lockout instead.
+ */
+export function hashPin(secret: string, pin: string): string {
+  return createHmac('sha256', secret).update(`pin:${pin}`, 'utf8').digest('hex');
+}
+
+/**
+ * Validates a sign-in PIN: exactly six digits, and not one of the handful
+ * everyone tries first (a single repeated digit, or a straight run).
+ */
+export function requirePin(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d{6}$/.test(value)) {
+    throw badRequest('Your PIN must be exactly 6 digits.');
+  }
+  if (isTrivialPin(value)) {
+    throw badRequest('That PIN is too easy to guess. Please choose another.');
+  }
+  return value;
+}
+
+/** Repeated digits (111111) or a straight run up or down (123456, 987654). */
+export function isTrivialPin(pin: string): boolean {
+  const digits = [...pin].map(Number);
+  if (digits.every((d) => d === digits[0])) return true;
+  const steps = digits.slice(1).map((d, i) => d - digits[i]);
+  return steps.every((s) => s === 1) || steps.every((s) => s === -1);
 }
 
 /** Generates a device id. Used by the seed script and tests. */
