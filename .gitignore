@@ -7,6 +7,8 @@ functions/lib/
 
 # Firebase
 .firebase/
+# Persisted emulator state (local test accounts and data)
+.emulator-data/
 firebase-debug.log
 firebase-debug.*.log
 firestore-debug.log

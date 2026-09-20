@@ -172,8 +172,20 @@ the emulator runs.
 
 ```bash
 cd ~/Desktop/motiroong-backend
-firebase emulators:start --only functions,firestore,auth
+./emulators.sh
 ```
+
+This wraps `firebase emulators:start` with `--import`/`--export-on-exit`, so
+Auth users and Firestore documents survive a restart in `./.emulator-data`
+(gitignored). That matters more than it sounds: without it every restart wipes
+your admin account, and because `approveEmployee` requires an already-active
+admin, the only way back is to recreate it by hand in the Emulator UI. The
+export runs on a clean shutdown, so stop the suite with Ctrl-C rather than
+killing it. Delete `.emulator-data` to start from a blank slate.
+
+The script also resolves a Homebrew-installed JDK that is not linked onto the
+PATH — the Firestore emulator is a Java process, and an unlinked `openjdk`
+surfaces as a confusing "Unable to locate a Java Runtime".
 
 Emulator UI: <http://localhost:4000>. You get a Firestore browser, an Auth user
 list, and function logs — considerably better visibility than the real console.
@@ -209,6 +221,12 @@ the emulator take the shortcut instead: sign up a user in the app, then in the
 Emulator UI open `employees/{uid}` and set `status: "active"`,
 `role: "admin"`. Claims are stamped from Firestore on the next
 `getMyProfile`, so sign out and back in.
+
+This is a one-time bootstrap, not the normal path. With `./emulators.sh` the
+admin account persists across restarts, so every employee after this one gets
+approved in the admin console (`admin-motiroong`, which is already pointed at
+the emulator via `NEXT_PUBLIC_USE_EMULATORS`) through `approveEmployee` —
+exactly as it works against the deployed project.
 
 ---
 
