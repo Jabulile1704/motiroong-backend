@@ -1,0 +1,33 @@
+# Render blueprint for the callable server (functions/src/server.ts).
+#
+# The free plan runs a normal long-lived Node process, which is exactly what
+# the Express server is — no serverless adapter, no vendor-specific entry
+# point. Auth and Firestore stay on the real Firebase project; only the
+# compute lives here, because Cloud Functions requires the Blaze plan and
+# this does not.
+#
+# Free instances sleep after ~15 minutes idle and take roughly a minute to
+# wake, which the app surfaces as "Cannot reach the MoTiroong server". Point
+# a free uptime pinger at / every 10 minutes to keep it warm; the health
+# check deliberately touches no Firestore, so pinging it costs nothing.
+services:
+  - type: web
+    name: motiroong-backend
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: functions
+    buildCommand: npm ci && npm run build
+    startCommand: node lib/server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Set in the dashboard, never committed: base64 of the service account
+      # JSON. `sync: false` is what keeps it out of this file.
+      - key: FIREBASE_SERVICE_ACCOUNT_BASE64
+        sync: false
+      # Guards /tasks/close-stale-shifts, the replacement for the nightly
+      # scheduled function. Render generates it; copy it into your cron job.
+      - key: CRON_SECRET
+        generateValue: true
